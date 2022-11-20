@@ -6,6 +6,11 @@ Why DI in python? Well, it is NOT for everyone. It is always an good idea for lo
 user and implmentation. 
 
 ## How to use it
+### Install
+```bash
+pip install yapydi
+```
+
 ### Basic usage
 ```python
 from yapydi import enable_di, bean, injected, Injected

@@ -113,7 +113,7 @@ def get_method_delcared_class(method: Callable) -> Tuple[bool, Optional[ClassFqn
 
 logger = logging
 logger.basicConfig(
-    level=int(os.getenv("PY_LOG_LEVEL", "10")),
+    level=int(os.getenv("PY_LOG_LEVEL", "20")),
     format="%(name)s - %(levelname)s - %(pathname)s#%(lineno)d - %(message)s",
 )
 
@@ -1288,12 +1288,6 @@ class BeanInitializer:
             return BeanInitializer()
         return cls._instance
 
-    @classmethod
-    def init(cls) -> BeanRegistry:
-        """Initialization method of the beans"""
-        cls.get_instance().initialize()
-        return BeanFactory.registry()
-
     def __new__(cls, *args, **kwargs):
         if cls._instance is None:
             logger.debug("*********BeanInitializer is creating**********")
@@ -1327,7 +1321,7 @@ class BeanInitializer:
             )
         )
 
-    def logging_bean_def(self):
+    def __logging_bean_def(self):
         if not is_debug():
             return
         logger.debug("About to print existing bean definitions total={}".format(len(self.bean_metas.keys())))
@@ -1336,7 +1330,7 @@ class BeanInitializer:
 
     def initialize(self):
         """Initializing the beans"""
-        self.logging_bean_def()
+        self.__logging_bean_def()
         bean_dep_chain = BeanFactory.bean_dep_chain()
         bean_dep_chain.prepare_for_bean_creation()
         bean_def_list_in_order = bean_dep_chain.get_bean_creation_order()

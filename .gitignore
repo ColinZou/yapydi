@@ -1,3 +1,6 @@
 .jedi
 __pycache__
 .mac-env.sh
+dist/*
+src/yapydi.egg-info
+build/

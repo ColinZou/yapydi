@@ -1,4 +1,5 @@
 from yapydi import bean, injected, BeanInitializer, Injected, Scope, logger, BeanFactory, enable_di
+from typing import cast
 
 
 #######################Testing Area########################
@@ -117,7 +118,7 @@ def test_basic_inject():
     assert item.name == bean_test_str_content
 
 
-def test_bean_retrieve():
+def test_bean_retrieve() -> None:
     registry = BeanFactory.registry()
     assert registry is not None
     item = registry.one_by_name("my_item_factory")
@@ -125,10 +126,10 @@ def test_bean_retrieve():
     assert type(item) == MyItem
     assert item.name == bean_test_str_content
 
-    item: MyItem = registry.one_by_type(MyItem)
-    assert item is not None
-    assert type(item) == MyItem
-    assert item.name == bean_test_str_content
+    my_item: MyItem = cast(MyItem, registry.one_by_type(MyItem))
+    assert my_item is not None
+    assert type(my_item) == MyItem
+    assert my_item.name == bean_test_str_content
 
 
 def test_inject_without_default_value():
@@ -145,11 +146,11 @@ def test_injection_inside_class():
     assert content == bean_test_str_content
 
 
-def test_injection_by_configuration():
+def test_injection_by_configuration() -> None:
     registry = BeanFactory.registry()
     hard_to_tell_content = MyConfigturation.hard_to_tell_content
     test_str = bean_test_str_content
-    item: MyConfigturation = registry.one_by_type(MyConfigturation)
+    item: MyConfigturation = cast(MyConfigturation, registry.one_by_type(MyConfigturation))
     assert item is not None
     assert item.bean_test_str is not None
     assert item.bean_test_str == test_str

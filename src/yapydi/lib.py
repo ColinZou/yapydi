@@ -7,7 +7,8 @@ import sys
 from collections.abc import Callable
 from enum import Enum
 from threading import RLock
-from typing import Any, Generic, List, Optional, TypeVar, cast, Dict, Tuple, Type
+from types import FunctionType
+from typing import Any, Generic, List, Optional, TypeVar, cast, Dict, Tuple, Type, Union
 from inspect import _empty
 
 InjectedType = TypeVar("InjectedType")
@@ -65,7 +66,7 @@ def is_debug() -> bool:
     return logger.root.level == logging.DEBUG
 
 
-def is_function(item: Any) -> bool:
+def is_function(item: Union[Callable, type]) -> bool:
     """
     Check if item is Callable but not a class
 
@@ -78,7 +79,10 @@ def is_function(item: Any) -> bool:
     bool
         True if the item is Callable and not a class
     """
-    return isinstance(item, Callable) if type(item) is not type else issubclass(item, Callable)
+    if type(item) is type:
+        return callable(item)
+    else:
+        return isinstance(item, FunctionType)
 
 
 def get_method_delcared_class(method: Callable) -> Tuple[bool, Optional[ClassFqn]]:
@@ -339,7 +343,7 @@ class BeanDependencyChainBuilder:
         A map holding beans' initialization order.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.raw_defs: List[ScopedBeanDefWithThinDeps] = []
         self.raw_defs_map: Dict[BaseBeanDef, ScopedBeanDefWithThinDeps] = dict()
         self.bare_type_and_raw_defs_map: Dict[BaseBeanDef, ScopedBeanDef] = dict()
@@ -553,7 +557,7 @@ class BeanRegistry:
             return BeanRegistry()
         return cls._instance
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.__beans_name_map: dict[str, Bean] = BeanRegistry._beans_name_map
         self.__beans_type_map: dict[BaseBeanDef, List[Bean]] = BeanRegistry._beans_type_map
         self.__bean_lock = BeanRegistry._bean_lock
@@ -688,7 +692,7 @@ class BeanRegistry:
         else:
             items = self.__beans_type_map[t]
             if len(items) == 0:
-                items = self.__get_matching_types(t.type)
+                items = self.__get_matching_types(cast(Type, t.type))
         if len(items) == 0:
             raise Exception("Could not find a bean for type {}".format(t))
         # trying to matching bean by name first
@@ -718,7 +722,8 @@ class BeanRegistry:
         matching_types = list(filter(filter_method, keys))
         getter_method = lambda x: self.__beans_type_map[x]
         result: List[Bean] = []
-        [result.extend(getter_method(x)) for x in matching_types]
+        for x in matching_types:
+            result.extend(getter_method(x))
         return result
 
 
@@ -1173,7 +1178,7 @@ class BeanFactory:
         # handling the annotation being used with @bean
         if isinstance(real_func, BeanProviderMeta):
             bean_provider_meta = cast(BeanProviderMeta, real_func)
-            real_func = func.func
+            real_func = cast(BeanProviderMeta, func).func
         logger.debug("INIT trying to delcare injected method {}".format(real_func.__name__))
         meta = InjectedInstructionMeta(real_func, bean_provider_meta)
         real_func.__annotations__[method_annotation_meta_injected] = meta
@@ -1181,7 +1186,9 @@ class BeanFactory:
         def wrapper(*args, **kwargs) -> Any:
             if internal_call_arg in kwargs:
                 del kwargs[internal_call_arg]
-            (real_args, real_kwargs) = cls.inject_arguments(real_func, args, kwargs)
+            (real_args, real_kwargs) = cls.inject_arguments(
+                real_func, cast(Tuple[Any], args), cast(Dict[str, Any], kwargs)
+            )
             logger.debug(
                 "About to call {} with {} args = {} and {} kwargs = {}".format(
                     real_func.__name__,
@@ -1226,7 +1233,9 @@ class BeanFactory:
 
         def wrapper(*args: Any, **kwargs) -> Any:
             raw_method = method.func
-            (_, real_kwargs) = cls.inject_arguments(raw_method, args, kwargs, method)
+            (_, real_kwargs) = cls.inject_arguments(
+                raw_method, cast(Tuple[Any], args), cast(Dict[str, Any], kwargs), method
+            )
             real_kwargs[internal_call_arg] = True
             result = method(*args, **real_kwargs)
             logger.debug("Got {} from real method {}".format(result, raw_method.__name__))
@@ -1296,7 +1305,7 @@ class BeanInitializer:
             cls._instance.__init__(*args, **kwargs)
         return cls._instance
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.bean_metas: Dict[ScopedBeanDef, BeanProviderMeta] = BeanInitializer._bean_metas
 
     def register_bean_def(self, scoped_bean_def: ScopedBeanDef, bean_meta: BeanProviderMeta):

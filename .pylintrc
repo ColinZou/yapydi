@@ -1,0 +1,6 @@
+[FORMAT]
+max-line-length=120
+    disable=too-few-methods,
+    inivalid-metaclass,
+    missing-docstring,
+    invalid-type-comment-or-annotation

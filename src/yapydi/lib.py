@@ -11,17 +11,21 @@ from types import FunctionType
 from typing import Any, Generic, List, Optional, TypeVar, cast, Dict, Tuple, Type, Union
 from inspect import _empty
 
-InjectedType = TypeVar("InjectedType")
+InjectedTypeDef = TypeVar("InjectedTypeDef")
 # copied from python dependency injector
 if sys.version_info < (3, 7):
-    from typing import GenericMeta
+    from typing import GenericMeta  # pylint: disable=code-is-unreachable
 else:
 
     class GenericMeta(type):
-        ...
+        """Delcaring a missing type"""
 
 
 class ClassGetItemMeta(GenericMeta):
+    """
+    Class item meta
+    """
+
     def __getitem__(cls, item):
         # Spike for Python 3.6
         if isinstance(item, tuple):
@@ -29,17 +33,7 @@ class ClassGetItemMeta(GenericMeta):
         return cls(item)
 
 
-class ClassFqn:
-    def __init__(self, module, class_name):
-        self.module = module
-        self.class_name = class_name
-        self.fqn = "{}.{}".format(module, class_name)
-
-    def __str__(self):
-        return "ClassFqn[{}]".format(self.fqn)
-
-
-class Injected(Generic[InjectedType], metaclass=ClassGetItemMeta):
+class Injected(Generic[InjectedTypeDef], metaclass=ClassGetItemMeta):
     """
     Injected meta for functions to mark a argument value need to be injected.
     CAUTION: be aware of your argument name, the framework will try to lookup bean by argument name first.
@@ -50,8 +44,9 @@ class Injected(Generic[InjectedType], metaclass=ClassGetItemMeta):
         The type of the argument
     """
 
-    def __init__(self, t: Type[Any]):
-        self.real_type = t
+    def __init__(self, the_type: Type[Any], bean_name: str = ""):
+        self.real_type = the_type
+        self.bean_name = bean_name
 
 
 def is_debug() -> bool:
@@ -127,6 +122,29 @@ method_annotation_meta_bean = "__di_method_annotation_meta_bean__"
 method_annotation_real_method_reference = "__di_method_annotation_real_method_ref__"
 
 
+class ClassFqn:  # pylint: disable=too-few-public-methods
+    """
+    Class's full qualified name definition
+
+    Attributes
+    ----
+    module: str
+        Module name which contains the class
+    class_name: str
+        Class name
+    fqn: str
+        {module}.{class_name}
+    """
+
+    def __init__(self, module: str, class_name: str):
+        self.module = module
+        self.class_name = class_name
+        self.fqn = f"{module}.{class_name}"
+
+    def __str__(self):
+        return f"ClassFqn[{self.fqn}]"
+
+
 class Scope(Enum):
     """Scope of the bean, used by @bean() annotation, for example
     @bean(Scope.SINGLETON)
@@ -137,6 +155,12 @@ class Scope(Enum):
 
     SINGLETON = 1
     PROTOTYPE = 2
+
+
+class InjectedParam:
+    def __init__(self, param_name: str, bean_name: str) -> None:
+        self.param_name = param_name
+        self.bean_name = bean_name
 
 
 class BaseBeanDef:
@@ -746,7 +770,7 @@ def will_argument_be_ignored(func: Callable, argument: str) -> bool:
     return method_name == "__init__" and argument == "self"
 
 
-def parse_needed_injected_params(func: Callable) -> Dict[str, Type[Any]]:
+def parse_needed_injected_params(func: Callable) -> Dict[InjectedParam, Type[Any]]:
     """Parsing params should be injected by DI.
 
     Parameters
@@ -758,7 +782,7 @@ def parse_needed_injected_params(func: Callable) -> Dict[str, Type[Any]]:
     ----
     dict[str, type]: A dict contains name and its type for injecting.
     """
-    injected_params: Dict[str, Type[Any]] = dict()
+    injected_params: Dict[InjectedParam, Type[Any]] = dict()
     signature = inspect.signature(func)
     parameters = signature.parameters
     method_name = func.__name__
@@ -766,11 +790,15 @@ def parse_needed_injected_params(func: Callable) -> Dict[str, Type[Any]]:
     for k, v in parameters.items():
         default_value = v.default
         param_type: Optional[Type] = None
+        param_name = k
+        bean_name = k
         if v.annotation is not None:
             param_type = v.annotation
         if isinstance(default_value, Injected):
             injected_value: Injected = cast(Injected, default_value)
             param_type = injected_value.real_type
+            if len(injected_value.bean_name) > 0:
+                bean_name = injected_value.bean_name
         if param_type is None:
             logger.warn(
                 "Failed to decide injected data type for {}.{}, annotated type is {} and default value is {}".format(
@@ -782,7 +810,7 @@ def parse_needed_injected_params(func: Callable) -> Dict[str, Type[Any]]:
             logger.debug("Ignoring argument {} of method {}".format(k, method_name))
             continue
         # logger.debug("*** {}.{} can be injected with type={}".format(method_name, k, param_type))
-        injected_params.setdefault(k, param_type)
+        injected_params.setdefault(InjectedParam(param_name, bean_name), param_type)
     return injected_params
 
 
@@ -814,7 +842,7 @@ class BeanProviderMeta:
         bean_name: str,
         return_type: Type[Any],
         scope: Scope,
-        init_params_need_injection: Optional[Dict[str, Type[Any]]] = None,
+        init_params_need_injection: Optional[Dict[InjectedParam, Type[Any]]] = None,
         class_method_flag: bool = False,
         class_reference: Optional[ClassFqn] = None,
     ):
@@ -998,7 +1026,7 @@ class BeanFactory:
         t: Type[Any],
         factory_method: Callable,
         scope: Scope = Scope.SINGLETON,
-        init_params_need_injection: Optional[Dict[str, Type[Any]]] = None,
+        init_params_need_injection: Optional[Dict[InjectedParam, Type[Any]]] = None,
     ) -> ScopedBeanDef:
         """Registering bean's definition.
 
@@ -1055,7 +1083,7 @@ class BeanFactory:
                 if meta.init_params_need_injection is None
                 else meta.init_params_need_injection
             )
-            deps = list(map(lambda x: BaseBeanDef(x, params_could_injected[x]), params_could_injected.keys()))
+            deps = list(map(lambda x: BaseBeanDef(x.bean_name, params_could_injected[x]), params_could_injected.keys()))
             if meta.class_method_flag and meta.class_reference is not None:
                 deps.append(BaseBeanDef("", meta.class_reference))
             scoped_bean_def = ScopedBeanDefWithThinDeps(
@@ -1277,9 +1305,10 @@ class BeanFactory:
         if meta is None:
             meta = InjectedInstructionMeta(method)
         for bean_name in meta.injected_params.keys():
+            bean_alias = bean_name.bean_name
             param_type = meta.injected_params[bean_name]
-            param_value = registry.one_by_name_or_type(bean_name, param_type)
-            real_kwargs[bean_name] = param_value
+            param_value = registry.one_by_name_or_type(bean_alias, param_type)
+            real_kwargs[bean_name.param_name] = param_value
             logger.debug("Trying to inject method {} argument {}={}".format(method.__name__, bean_name, param_value))
         return (args, real_kwargs)
 

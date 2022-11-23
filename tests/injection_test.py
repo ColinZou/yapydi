@@ -26,9 +26,9 @@ class MyItem:
 
 class MyInjection:
     @injected
-    def __init__(self, bean_test_str: str = Injected[str]):
+    def __init__(self, test: str = Injected[str, "bean_test_str"]):
         logger.info("{} __init__ self={}, got bean_test_str={}".format(self.__class__, self, bean_test_str))
-        self.bean_test_str = bean_test_str
+        self.bean_test_str = test
 
 
 @bean()
@@ -90,8 +90,8 @@ def my_test_method(
 
 
 @injected
-def another_method(another_bean: str = Injected[str]):
-    return another_bean
+def another_method(test: str = Injected[str, "another_bean"]):
+    return test
 
 
 @injected

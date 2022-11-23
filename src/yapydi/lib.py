@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+import re
 import inspect
 import logging
 import os
@@ -26,6 +26,12 @@ class ClassMetaInfo(GenericMeta):
     Class item meta
     """
 
+    def __getitem__(cls, item):
+        # Spike for Python 3.6
+        if isinstance(item, tuple):
+            return cls(*item)
+        return cls(item)
+
 
 class Injected(Generic[InjectedTypeDef], metaclass=ClassMetaInfo):
     """
@@ -38,9 +44,9 @@ class Injected(Generic[InjectedTypeDef], metaclass=ClassMetaInfo):
         The type of the argument
     """
 
-    def __init__(self, real_type: Type[Any]):
+    def __init__(self, real_type: Type[Any], bean_name: str = ""):
         self.real_type = real_type
-        self.bean_name = ""
+        self.bean_name = bean_name
 
 
 def is_debug() -> bool:
@@ -514,6 +520,7 @@ class BeanDependencyChainBuilder:
                 ref_type = dep_bean_def.type
                 dep_bean_def = BaseBeanDef(BeanFactory.snake_case(fetched_type.__name__), fetched_type)
                 dep_bean_def.shadow_type = cast(ClassFqn, ref_type)
+                real_type = fetched_type
                 logger.debug(f"Corrected depends on from {old_type} to {dep_bean_def}")
             if dep_bean_def not in self.bare_type_and_raw_defs_map:
                 # trying to find any subclass can work
@@ -790,7 +797,7 @@ def parse_needed_injected_params(func: Callable) -> Dict[InjectedParam, Type[Any
     ----
     dict[str, type]: A dict contains name and its type for injecting.
     """
-    injected_params: Dict[InjectedParam, Type[Any]] = dict()
+    injected_params: Dict[InjectedParam, Type[Any]] = {}
     signature = inspect.signature(func)
     parameters = signature.parameters
     method_name = func.__name__
@@ -937,10 +944,10 @@ class InjectedInstructionMeta:
 
     def __call__(self, *args, **kwargs):
         method = self.func
+        kw_args_str = ",".join(list(kwargs))
         logger.debug(
-            "InjectedInstructionMeta {}.__call__ {} {} positional arguments, {} kwargs {}".format(
-                self, method.__name__, len(args), len(kwargs), ",".join([k for k in kwargs])
-            )
+            f"InjectedInstructionMeta {self}.__call__ {method.__name__} {len(args)} "
+            + f"positional arguments, {len(kwargs)} kwargs {kw_args_str}"
         )
         # call real method or there will be stack overflow happened.
         if INTERNAL_CALL_FLAG in kwargs:
@@ -964,8 +971,8 @@ class BeanFactory:
         Keeping beans dependencies and init order.
     """
 
-    __named_factories: Dict[str, BeanProviderMeta] = dict()
-    __class_ref: Dict[str, Type[Any]] = dict()
+    __named_factories: Dict[str, BeanProviderMeta] = {}
+    __class_ref: Dict[str, Type[Any]] = {}
     __bean_registry = BeanRegistry()
     __global_lock = RLock()
     __bean_dep_chain = BeanDependencyChainBuilder()
@@ -1003,8 +1010,8 @@ class BeanFactory:
         """
         if class_path.fqn in cls.__class_ref:
             return cls.__class_ref[class_path.fqn]
-        m = sys.modules[class_path.module]
-        return getattr(m, class_path.class_name)
+        module = sys.modules[class_path.module]
+        return getattr(module, class_path.class_name)
 
     @classmethod
     def get_class_by_bean_def(cls, bean_def: BaseBeanDef) -> Type[Any]:
@@ -1020,7 +1027,7 @@ class BeanFactory:
         Type[Any]
             The type for the bean
         """
-        if type(bean_def.type) == ClassFqn:
+        if isinstance(bean_def.type, ClassFqn):
             return cls.get_class(cast(ClassFqn, bean_def.type))
         return cast(Type[Any], bean_def.type)
 
@@ -1028,7 +1035,7 @@ class BeanFactory:
     def register_bean_def(
         cls,
         name: str,
-        t: Type[Any],
+        bean_type: Type[Any],
         factory_method: Callable,
         scope: Scope = Scope.SINGLETON,
         init_params_need_injection: Optional[Dict[InjectedParam, Type[Any]]] = None,
@@ -1039,7 +1046,7 @@ class BeanFactory:
         ----
         name: str
             Bean's type
-        t: type
+        bean_type: type
             Bean's type
         factory_method: Callable
             Factory method for this bean
@@ -1052,11 +1059,10 @@ class BeanFactory:
             If the bean duplicated.
         """
         logger.debug(
-            "Registering new bean factory name={}, type={}, scope={}, factory_method={}".format(
-                name, t, factory_method, scope
-            )
+            f"Registering new bean factory name={name}, type={bean_type}, "
+            + f"scope={scope}, factory_method={factory_method}"
         )
-        meta = BeanProviderMeta(factory_method, name, t, scope, init_params_need_injection)
+        meta = BeanProviderMeta(factory_method, name, bean_type, scope, init_params_need_injection)
         return cls.register_bean_def_with_meta(meta)
 
     @classmethod
@@ -1077,9 +1083,8 @@ class BeanFactory:
             result = cls.__named_factories.setdefault(meta.bean_name, meta)
             if result != meta:
                 raise Exception(
-                    "Could not register duplicated bean factory for bean name={} type={}".format(
-                        meta.bean_name, meta.return_type
-                    )
+                    "Could not register duplicated bean factory for bean "
+                    + f"name={meta.bean_name} type={meta.return_type}"
                 )
             bean_type = meta.return_type
             factory_method = meta.func
@@ -1112,13 +1117,12 @@ class BeanFactory:
         @parameters
         content
         """
-        import re
 
         upper_case_chars = re.findall(r"([A-Z])", content)
-        for c in upper_case_chars:
-            if content[0] == c:
-                content = c.lower() + content[1:]
-            content = content.replace(c, "_{}".format(c.lower()))
+        for c_item in upper_case_chars:
+            if content[0] == c_item:
+                content = c_item.lower() + content[1:]
+            content = content.replace(c_item, f"_{c_item.lower()}")
         return content
 
     @classmethod
@@ -1140,15 +1144,12 @@ class BeanFactory:
         params_need_injected = parse_needed_injected_params(init_method)
         meta = BeanProviderMeta(class_bean_wrapper, bean_name, func, scope, params_need_injected)
         class_bean_wrapper.__annotations__[METHOD_ANNOTATION_META_BEAN] = meta
-        class_path = "{}.{}".format(func.__module__, func.__name__)
+        class_path = f"{func.__module__}.{func.__name__}"
         cls.__class_ref.setdefault(class_path, func)
+        param_str = ", ".join([f"{x}:{y}" for (x, y) in params_need_injected.items()])
         logger.debug(
-            "Found init params need to be injected: [{}] for class {}[{}] method {}.".format(
-                ", ".join(["{}:{}".format(x, y) for (x, y) in params_need_injected.items()]),
-                func,
-                class_path,
-                init_method,
-            )
+            "Found init params need to be "
+            + f"injected: [{param_str}] for class {func}[{class_path}] method {init_method}."
         )
         return func
 
@@ -1160,23 +1161,20 @@ class BeanFactory:
         The handling method for @bean annotation
         """
         # use another method for preparing metadata for a class bean
-        if type(func) is type:
+        if isinstance(func, type):
             return cls.__class_bean_decorator(cast(Type[Any], func), scope, name)
         real_func = func
         metadata_attr = METHOD_ANNOTATION_REAL_METHOD_REFERENCE
         if is_function(real_func) and metadata_attr in real_func.__annotations__:
             real_func = func.__annotations__[metadata_attr]
-            logger.debug(
-                "find real method {} by {} attr from {}".format(real_func.__name__, metadata_attr, func.__name__)
-            )
+            logger.debug(f"find real method {real_func.__name__} by {metadata_attr} attr from {func.__name__}")
         annotations = real_func.__annotations__
         bean_name = real_func.__name__ if len(name) == 0 else name
         return_type = annotations["return"]
         (is_class_member, class_reference) = get_method_delcared_class(real_func)
         logger.debug(
-            "Bean method {} : {} return: {}, is_class_member:{}, class_reference:{}".format(
-                real_func.__name__, type(real_func), return_type, is_class_member, class_reference
-            )
+            f"Bean method {real_func.__name__} : {type(real_func)} return: {return_type}, "
+            + f"is_class_member:{is_class_member}, class_reference:{class_reference}"
         )
         meta = BeanProviderMeta(
             real_func,
@@ -1212,7 +1210,7 @@ class BeanFactory:
         if isinstance(real_func, BeanProviderMeta):
             bean_provider_meta = cast(BeanProviderMeta, real_func)
             real_func = cast(BeanProviderMeta, func).func
-        logger.debug("INIT trying to delcare injected method {}".format(real_func.__name__))
+        logger.debug(f"INIT trying to delcare injected method {real_func.__name__}")
         meta = InjectedInstructionMeta(real_func, bean_provider_meta)
         real_func.__annotations__[METHOD_ANNOTATION_META_INJECTED] = meta
 
@@ -1222,15 +1220,13 @@ class BeanFactory:
             (real_args, real_kwargs) = cls.inject_arguments(
                 real_func, cast(Tuple[Any], args), cast(Dict[str, Any], kwargs)
             )
-            logger.debug(
-                "About to call {} with {} args = {} and {} kwargs = {}".format(
-                    real_func.__name__,
-                    len(real_args),
-                    ",".join([str(x) for x in real_args]),
-                    len(real_kwargs.keys()),
-                    ["{}='{}'".format(k, v) for (k, v) in real_kwargs.items()],
+            if is_debug():
+                kw_args_items = [f"{k}='{v}'" for (k, v) in real_kwargs.items()]
+                args_str = (",".join([str(x) for x in real_args]),)
+                logger.debug(
+                    f"About to call {real_func.__name__} with {len(real_args)} args = {args_str} "
+                    + f"and {len(real_kwargs)} kwargs = {kw_args_items}"
                 )
-            )
             return func(*real_args, **real_kwargs)
 
         wrapper.__annotations__[METHOD_ANNOTATION_REAL_METHOD_REFERENCE] = func
@@ -1271,7 +1267,7 @@ class BeanFactory:
             )
             real_kwargs[INTERNAL_CALL_FLAG] = True
             result = method(*args, **real_kwargs)
-            logger.debug("Got {} from real method {}".format(result, raw_method.__name__))
+            logger.debug(f"Got {result} from real method {raw_method.__name__}")
             return result
 
         return wrapper
@@ -1301,10 +1297,10 @@ class BeanFactory:
         method_type = type(method)
         registry = BeanFactory.registry()
         if not is_function(method_type):
-            raise Exception("Need a function for injection, but got {}.".format(type(method)))
-        real_kwargs: Dict[str, Any] = dict()
-        for k in kwargs:
-            real_kwargs[k] = kwargs[k]
+            raise Exception(f"Need a function for injection, but got {method}.")
+        real_kwargs: Dict[str, Any] = {}
+        for key in kwargs:
+            real_kwargs[key] = kwargs[key]
         if meta is None and hasattr(method.__annotations__, METHOD_ANNOTATION_META_INJECTED):
             meta = method.__annotations__[METHOD_ANNOTATION_META_INJECTED]
         if meta is None:
@@ -1314,7 +1310,7 @@ class BeanFactory:
             param_type = meta.injected_params[bean_name]
             param_value = registry.one_by_name_or_type(bean_alias, param_type)
             real_kwargs[bean_name.param_name] = param_value
-            logger.debug("Trying to inject method {} argument {}={}".format(method.__name__, bean_name, param_value))
+            logger.debug(f"Trying to inject method {method.__name__} argument {bean_name}={param_value}")
         return (args, real_kwargs)
 
 
@@ -1322,7 +1318,7 @@ class BeanInitializer:
     """Bean initailizer, which should be the entry for DI users."""
 
     _instance = None
-    _bean_metas: Dict[ScopedBeanDef, BeanProviderMeta] = dict()
+    _bean_metas: Dict[ScopedBeanDef, BeanProviderMeta] = {}
 
     @classmethod
     def get_instance(cls) -> BeanInitializer:
@@ -1335,7 +1331,7 @@ class BeanInitializer:
         if cls._instance is None:
             logger.debug("*********BeanInitializer is creating**********")
             cls._instance = super().__new__(cls)
-            cls._instance.bean_metas = dict()
+            cls._instance.bean_metas = {}
             cls._instance.__init__(*args, **kwargs)
         return cls._instance
 
@@ -1353,23 +1349,20 @@ class BeanInitializer:
         bean_meta: BeanProviderMeta
             The definition of how to create a bean
         """
-        logger.debug(
-            "*** Registering entry scoped_bean_def={}, bean_provider_meta={}".format(scoped_bean_def, bean_meta)
-        )
+        logger.debug(f"*** Registering entry scoped_bean_def={scoped_bean_def}, bean_provider_meta={bean_meta}")
         self.bean_metas.setdefault(scoped_bean_def, bean_meta)
         item = bean_meta
         logger.debug(
-            "Save bean provider, real method is {} scoped bean def type {} definition {}, bean meta is {}".format(
-                item.func.__name__, type(scoped_bean_def), scoped_bean_def, bean_meta
-            )
+            f"Save bean provider, real method is {item.func.__name__} scoped bean def "
+            + f"type {type(scoped_bean_def)} definition {scoped_bean_def}, bean meta is {bean_meta}"
         )
 
     def __logging_bean_def(self):
         if not is_debug():
             return
-        logger.debug("About to print existing bean definitions total={}".format(len(self.bean_metas.keys())))
+        logger.debug(f"About to print existing bean definitions total={len(self.bean_metas.keys())}")
         for key in list(self.bean_metas.keys()):
-            logger.debug("[bean def: {}], [bean provider: {}]".format(key, self.bean_metas[key]))
+            logger.debug(f"[bean def: {key}], [bean provider: {self.bean_metas[key]}]")
 
     def initialize(self):
         """Initializing the beans"""
@@ -1379,17 +1372,17 @@ class BeanInitializer:
         bean_def_list_in_order = bean_dep_chain.get_bean_creation_order()
         registry = BeanFactory.registry()
         for bean_def in bean_def_list_in_order:
-            logger.debug("Trying to init bean {}".format(bean_def))
+            logger.debug(f"Trying to init bean {bean_def}")
             if not bean_def in self.bean_metas:
-                raise Exception("Could not find BeanProviderMeta for {}".format(bean_def))
+                raise Exception(f"Could not find BeanProviderMeta for {bean_def}")
             meta = self.bean_metas[bean_def]
             if bean_def.scope == Scope.SINGLETON:
                 if callable(meta):
                     result = meta()
-                    logger.debug("Inited bean {}[{}]={}".format(meta.bean_name, meta.return_type, result))
+                    logger.debug(f"Inited bean {meta.bean_name}[{meta.return_type}]={result}")
                     registry.register_bean(Bean(meta.bean_name, meta.return_type, result, meta))
                 else:
-                    raise Exception("Could not init bean {} while the meta {} is not callable".format(bean_def, meta))
+                    raise Exception(f"Could not init bean {bean_def} while the meta {meta} is not callable")
             else:
                 # save the bean as prototype
                 registry.register_bean(PrototypeBean(meta.bean_name, meta.return_type, meta))

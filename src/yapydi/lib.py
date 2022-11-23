@@ -14,26 +14,20 @@ from inspect import _empty
 InjectedTypeDef = TypeVar("InjectedTypeDef")
 # copied from python dependency injector
 if sys.version_info < (3, 7):
-    from typing import GenericMeta  # pylint: disable=code-is-unreachable
+    from typing import GenericMeta
 else:
 
     class GenericMeta(type):
         """Delcaring a missing type"""
 
 
-class ClassGetItemMeta(GenericMeta):
+class ClassMetaInfo(GenericMeta):
     """
     Class item meta
     """
 
-    def __getitem__(cls, item):
-        # Spike for Python 3.6
-        if isinstance(item, tuple):
-            return cls(*item)
-        return cls(item)
 
-
-class Injected(Generic[InjectedTypeDef], metaclass=ClassGetItemMeta):
+class Injected(Generic[InjectedTypeDef], metaclass=ClassMetaInfo):
     """
     Injected meta for functions to mark a argument value need to be injected.
     CAUTION: be aware of your argument name, the framework will try to lookup bean by argument name first.
@@ -44,9 +38,9 @@ class Injected(Generic[InjectedTypeDef], metaclass=ClassGetItemMeta):
         The type of the argument
     """
 
-    def __init__(self, the_type: Type[Any], bean_name: str = ""):
-        self.real_type = the_type
-        self.bean_name = bean_name
+    def __init__(self, real_type: Type[Any]):
+        self.real_type = real_type
+        self.bean_name = ""
 
 
 def is_debug() -> bool:
@@ -74,10 +68,9 @@ def is_function(item: Union[Callable, type]) -> bool:
     bool
         True if the item is Callable and not a class
     """
-    if type(item) is type:
+    if isinstance(item, type):
         return callable(item)
-    else:
-        return isinstance(item, FunctionType)
+    return isinstance(item, FunctionType)
 
 
 def get_method_delcared_class(method: Callable) -> Tuple[bool, Optional[ClassFqn]]:
@@ -99,14 +92,14 @@ def get_method_delcared_class(method: Callable) -> Tuple[bool, Optional[ClassFqn
     if is_method:
         fqn = method.__qualname__
         parts = fqn.split(".")
-        logger.debug("====Method {}".format(fqn))
+        logger.debug(f"====Method {fqn}")
         if len(parts) == 1:
             return False, None
         container_path = ".".join(parts[0:-1])
         module_name = method.__module__
-        logger.debug("====Method {} container path {}.{}".format(fqn, module_name, container_path))
+        logger.debug(f"====Method {fqn} container path {module_name}.{container_path}")
         return True, ClassFqn(module_name, container_path)
-    logger.debug("{} {} type={}is not a method ?".format(method.__name__, method, type(method)))
+    logger.debug(f"{method.__name__} {method} type={method} is not a method ?")
     return False, None
 
 
@@ -116,10 +109,10 @@ logger.basicConfig(
     format="%(name)s - %(levelname)s - %(pathname)s#%(lineno)d - %(message)s",
 )
 
-internal_call_arg = "__di_module_call_identifier__"
-method_annotation_meta_injected = "__di_method_annotation_meta_injected__"
-method_annotation_meta_bean = "__di_method_annotation_meta_bean__"
-method_annotation_real_method_reference = "__di_method_annotation_real_method_ref__"
+INTERNAL_CALL_FLAG = "__di_module_call_identifier__"
+METHOD_ANNOTATION_META_INJECTED = "__di_method_annotation_meta_injected__"
+METHOD_ANNOTATION_META_BEAN = "__di_method_annotation_meta_bean__"
+METHOD_ANNOTATION_REAL_METHOD_REFERENCE = "__di_method_annotation_real_method_ref__"
 
 
 class ClassFqn:  # pylint: disable=too-few-public-methods
@@ -174,15 +167,15 @@ class BaseBeanDef:
         Bean's type
     """
 
-    def __init__(self, name: str, t: Type[Any] | ClassFqn):
+    def __init__(self, name: str, bean_type: Type[Any] | ClassFqn):
         self.name = name
-        self.type = t
+        self.type = bean_type
         # ref by ClassFqn
-        self.shadow_type: Optional[ClassFqn] = t if isinstance(t, ClassFqn) else None
+        self.shadow_type: Optional[ClassFqn] = bean_type if isinstance(bean_type, ClassFqn) else None
 
     def __eq__(self, another) -> bool:
         return (
-            type(another) == BaseBeanDef
+            isinstance(another, BaseBeanDef)
             and another.name == self.name
             and another.type == self.type
             and another.shadow_type == self.shadow_type
@@ -192,7 +185,7 @@ class BaseBeanDef:
         return hash(self.__class__) + hash(self.name) + hash(self.type) + hash(self.shadow_type)
 
     def __str__(self) -> str:
-        return "BaseBeanDef(name={}, type={})".format(self.name, self.type)
+        return f"BaseBeanDef(name={self.name}, type={self.type})"
 
 
 class Bean(BaseBeanDef):
@@ -214,7 +207,7 @@ class Bean(BaseBeanDef):
 
     def __eq__(self, another) -> bool:
         return (
-            type(another) == Bean
+            isinstance(another, Bean)
             and another.name == self.name
             and another.type == self.type
             and another.instance == self.instance
@@ -233,12 +226,12 @@ class PrototypeBean(Bean):
         The bean provider description for this bean
     """
 
-    def __init__(self, name: str, t: Type[Any], meta: BeanProviderMeta):
-        super().__init__(name, t, meta, meta)
+    def __init__(self, name: str, bean_type: Type[Any], meta: BeanProviderMeta):
+        super().__init__(name, bean_type, meta, meta)
 
     def __eq__(self, another) -> bool:
         return (
-            type(another) == PrototypeBean
+            isinstance(another, PrototypeBean)
             and another.name == self.name
             and another.type == self.type
             and another.instance == self.instance
@@ -248,7 +241,7 @@ class PrototypeBean(Bean):
         return hash(self.__class__) + super().__hash__() + hash(self.meta)
 
     def __str__(self):
-        return "PrototypeBean(name={}, type={}, meta={})".format(self.name, self.type, self.meta)
+        return f"PrototypeBean(name={self.name}, type={self.type}, meta={self.meta})"
 
 
 class ScopedBeanDef(BaseBeanDef):
@@ -268,7 +261,7 @@ class ScopedBeanDef(BaseBeanDef):
         self.base_bean_def = BaseBeanDef(name, t)
 
     def __eq__(self, another) -> bool:
-        basic_compare = type(another) == ScopedBeanDef and another.type == self.type and another.scope == self.scope
+        basic_compare = isinstance(another, ScopedBeanDef) and another.type == self.type and another.scope == self.scope
         # for prototype bean, we do not need to care about its name
         if self.scope == Scope.PROTOTYPE:
             return basic_compare
@@ -282,7 +275,7 @@ class ScopedBeanDef(BaseBeanDef):
         return basic_hash + hash(self.name)
 
     def __str__(self):
-        return "ScopedBeanDef(name={}, type={}, scope={})".format(self.name, self.type, self.scope)
+        return f"ScopedBeanDef(name={self.name}, type={self.type}, scope={self.scope})"
 
 
 class ScopedBeanDefWithThinDeps(ScopedBeanDef):
@@ -312,7 +305,7 @@ class ScopedBeanDefWithThinDeps(ScopedBeanDef):
         method_hash: int = 0,
         class_method_flag: bool = False,
         class_reference: Optional[ClassFqn] = None,
-    ):
+    ):  # pylint: disable=too-many-arguments
         super().__init__(name, t, scope)
         self.depends_on = depends_on
         self.depended_by = depended_by
@@ -323,7 +316,7 @@ class ScopedBeanDefWithThinDeps(ScopedBeanDef):
 
     def __eq__(self, another) -> bool:
         basic_eq = (
-            type(another) == ScopedBeanDefWithThinDeps
+            isinstance(another, ScopedBeanDefWithThinDeps)
             and another.scoped_bean_def == self.scoped_bean_def
             and another.depends_on == self.depends_on
             and another.class_method_flag == self.class_method_flag
@@ -346,8 +339,9 @@ class ScopedBeanDefWithThinDeps(ScopedBeanDef):
 
     def __str__(self):
         depends_on_str = "".join(["[" + str(x) + "]" for x in self.depends_on]) if len(self.depends_on) > 0 else "None"
-        return "name={}, type={}, scope={}, depended by {}, depends on {}".format(
-            self.name, self.type, self.scope, self.depended_by, depends_on_str
+        return (
+            f"name={self.name}, type={self.type}, scope={self.scope}, "
+            + f"depended by {self.depended_by}, depends on {depends_on_str}"
         )
 
 
@@ -369,9 +363,9 @@ class BeanDependencyChainBuilder:
 
     def __init__(self) -> None:
         self.raw_defs: List[ScopedBeanDefWithThinDeps] = []
-        self.raw_defs_map: Dict[BaseBeanDef, ScopedBeanDefWithThinDeps] = dict()
-        self.bare_type_and_raw_defs_map: Dict[BaseBeanDef, ScopedBeanDef] = dict()
-        self.init_order_map: dict[BaseBeanDef, int] = dict()
+        self.raw_defs_map: Dict[BaseBeanDef, ScopedBeanDefWithThinDeps] = {}
+        self.bare_type_and_raw_defs_map: Dict[BaseBeanDef, ScopedBeanDef] = {}
+        self.init_order_map: dict[BaseBeanDef, int] = {}
 
     def get_bean_creation_order(self) -> List[BaseBeanDef]:
         """Get the init order for beans, the BaseBeanDef at index 0 should be
@@ -387,8 +381,8 @@ class BeanDependencyChainBuilder:
         keys = [x for _, x in sorted(zip(values, keys), key=lambda pair: pair[0])]
         sorted(keys, key=lambda x: int(self.init_order_map[x]))
         if logger.root.level == logging.DEBUG:
-            for k in keys:
-                logger.debug("Will init {} at order {}.".format(k, self.init_order_map[k]))
+            for key in keys:
+                logger.debug(f"Will init {key} at order {self.init_order_map[key]}.")
         return keys
 
     def register_bean_def(self, bean_def: ScopedBeanDefWithThinDeps) -> BeanDependencyChainBuilder:
@@ -404,26 +398,24 @@ class BeanDependencyChainBuilder:
         """
         scoped_bean_def = bean_def.scoped_bean_def
         logger.debug(
-            "Registering bean definition {} hash={} scoped-bean-def-hash={}".format(
-                bean_def, hash(bean_def), hash(scoped_bean_def)
-            )
+            "Registering bean definition {bean_def} hash={hash(bean_def)} scoped-bean-def-hash={scoped_bean_def}"
         )
         self.raw_defs.append(bean_def)
         current_value = self.raw_defs_map.setdefault(scoped_bean_def, bean_def)
         # use protype scope if there's conflicts happened
         if current_value != bean_def and bean_def.scope == Scope.PROTOTYPE:
-            logger.debug("Updating value in raw_defs_map {} to {}".format(scoped_bean_def, bean_def))
+            logger.debug(f"Updating value in raw_defs_map {scoped_bean_def} to {bean_def}")
             self.raw_defs_map[scoped_bean_def] = bean_def
 
         bare_type_raw_def = self.bare_type_and_raw_defs_map.setdefault(bean_def.base_bean_def, scoped_bean_def)
         # use protype scope if there's conflicts happened
         if bare_type_raw_def != bean_def and bean_def.scope == Scope.PROTOTYPE:
-            logger.debug("Updating value in bare_type_and_raw_defs_map {} to {}".format(bean_def.type, bean_def))
+            logger.debug(f"Updating value in bare_type_and_raw_defs_map {bean_def.type} to {bean_def}")
             self.bare_type_and_raw_defs_map[bean_def.base_bean_def] = scoped_bean_def
         return self
 
     def increase_type_init_order(
-        self, t: BaseBeanDef, qty: int, update_depdencies: bool = True, path: List[BaseBeanDef] = []
+        self, bean_def: BaseBeanDef, qty: int, update_depdencies: bool = True, path: Optional[List[BaseBeanDef]] = None
     ):
         """Increase bean's init order, can be used as decrease init order by
         passing negative order.
@@ -445,24 +437,25 @@ class BeanDependencyChainBuilder:
             If circular dependency found, or the BaseBeanDef could not be found,
             or bean's dependencies could not be found.
         """
-        old_order = self.init_order_map[t] if t in self.init_order_map else 0
+        if path is None:
+            path = []
+        old_order = self.init_order_map[bean_def] if bean_def in self.init_order_map else 0
         final_order = int(qty) + int(old_order)
-        self.init_order_map[t] = final_order
-        logger.debug(
-            "Bean {} init order is {},  dep path: {}".format(t, final_order, " > ".join([str(x) for x in path]))
-        )
+        self.init_order_map[bean_def] = final_order
+        path_str = " > ".join([str(x) for x in path])
+        logger.debug(f"Bean {bean_def} init order is {final_order},  dep path: {path_str}")
         if not update_depdencies:
             return
-        self.prepare_dependencies(t, abs(qty), path)
+        self.prepare_dependencies(bean_def, abs(qty), path)
 
     def logging_raw_def_maps(self):
         if not is_debug():
             return
         logger.debug("Will print registered bean")
         keys = list(self.raw_defs_map.keys())
-        for t in keys:
-            definition = self.raw_defs_map[t]
-            logger.debug("type {} = {} hash={}".format(t, definition, hash(t)))
+        for key in keys:
+            definition = self.raw_defs_map[key]
+            logger.debug(f"type {key} = {definition} hash={hash(key)}")
 
     def logging_bean_init_order(self):
         if not is_debug():
@@ -470,11 +463,14 @@ class BeanDependencyChainBuilder:
         definitions = self.get_bean_creation_order()
         order = 0
         for item in definitions:
-            logger.debug("[{}] the init order for {} is {}".format(order, item, order))
+            logger.debug(f"[{order}] the init order for {item}")
             order = order + 1
 
     def prepare_dependencies(
-        self, base_bean_def: BaseBeanDef, base_amount: int = 1, existing_call_path: List[BaseBeanDef] = []
+        self,
+        base_bean_def_ref: BaseBeanDef,
+        base_amount: int = 1,
+        existing_call_path: Optional[List[BaseBeanDef]] = None,
     ):
         """
         Prepare the dependencies for base_bean_def, so its dependencies can be inited in proper order.
@@ -486,19 +482,23 @@ class BeanDependencyChainBuilder:
         existing_call_path: List[BaseBeanDef]
             The dependencies path, for detecting circular dependencies
         """
-        t = base_bean_def
+        if existing_call_path is None:
+            existing_call_path = []
         # todo: may find a better way to do it?
-        if existing_call_path.count(t) > 1:
-            path_temp = [x for x in existing_call_path]
-            path_temp.append(t)
-            dep_list = ["{}".format(x) for x in path_temp]
-            raise Exception("Circular dependencies found: {}".format(" -> ".join(dep_list)))
-        if t not in self.raw_defs_map:
-            raise Exception("Could not find {} hash={} from bean definition map".format(t, hash(t)))
-        bean_def = self.raw_defs_map[t]
+        if existing_call_path.count(base_bean_def_ref) > 1:
+            path_temp = list(existing_call_path)
+            path_temp.append(base_bean_def_ref)
+            dep_list = [f"{x}" for x in path_temp]
+            dpe_list_str = " -> ".join(dep_list)
+            raise Exception(f"Circular dependencies found: {dpe_list_str}")
+        if base_bean_def_ref not in self.raw_defs_map:
+            raise Exception(
+                f"Could not find {base_bean_def_ref} hash={hash(base_bean_def_ref)} from bean definition map"
+            )
+        bean_def = self.raw_defs_map[base_bean_def_ref]
         # increase init order for bean which needs this type
         if bean_def.depended_by is not None:
-            tmp_path = [t]
+            tmp_path = [base_bean_def_ref]
             tmp_path.extend(existing_call_path)
             self.increase_type_init_order(bean_def, base_amount * -1, False, tmp_path)
             self.increase_type_init_order(bean_def.depended_by, base_amount, True, tmp_path)
@@ -507,20 +507,27 @@ class BeanDependencyChainBuilder:
             return
         bare_types = self.bare_type_and_raw_defs_map.keys()
         for dep_bean_def in depends_on:
-            if type(dep_bean_def.type) == ClassFqn:
+            real_type = dep_bean_def.type
+            if isinstance(real_type, ClassFqn):
                 old_type = dep_bean_def
                 fetched_type = BeanFactory.get_class(cast(ClassFqn, dep_bean_def.type))
                 ref_type = dep_bean_def.type
                 dep_bean_def = BaseBeanDef(BeanFactory.snake_case(fetched_type.__name__), fetched_type)
                 dep_bean_def.shadow_type = cast(ClassFqn, ref_type)
-                logger.debug("Corrected depends on from {} to {}".format(old_type, dep_bean_def))
+                logger.debug(f"Corrected depends on from {old_type} to {dep_bean_def}")
             if dep_bean_def not in self.bare_type_and_raw_defs_map:
                 # trying to find any subclass can work
-                filter_method = lambda x: issubclass(x.type, cast(Type, dep_bean_def.type))
-                found_types = list(filter(filter_method, bare_types))
+                real_type_ref = cast(Type, real_type)
+                filtered_data = filter(
+                    lambda x: isinstance(x.type, type)
+                    and issubclass(x.type, real_type_ref),  # pylint: disable=cell-var-from-loop
+                    bare_types,
+                )
+                found_types = list(filtered_data)
                 if len(found_types) == 0:
                     raise Exception(
-                        "Failed to find bean definition of {} which is depended by {}".format(bean_def.type, t.type)
+                        f"Failed to find bean definition of {bean_def.type}"
+                        + f" which is depended by {base_bean_def_ref.type}"
                     )
                 # use one that will work
                 # trying to find by bean name, or use matched first item
@@ -528,19 +535,15 @@ class BeanDependencyChainBuilder:
                 result_by_name = list(filter(lambda x: x.name == bean_def.name, found_types))
                 old_type = dep_bean_def
                 dep_bean_def = found_types[0] if len(result_by_name) == 0 else result_by_name[0]
-                logger.debug(
-                    "Chosen matched type {} for {} from {}".format(
-                        dep_bean_def, old_type, ", ".join([str(x) for x in found_types])
-                    )
-                )
+                found_types_str = ", ".join([str(x) for x in found_types])
+                logger.debug(f"Chosen matched type {dep_bean_def} for {old_type} from {found_types_str}")
             the_bean_def = self.bare_type_and_raw_defs_map[dep_bean_def]
-            tmp_path = [x for x in existing_call_path]
-            tmp_path.append(t)
+            tmp_path = list(existing_call_path)
+            tmp_path.append(base_bean_def_ref)
             amount = -1 * base_amount
             logger.debug(
-                "Trying to increate order for {} by {} because it is needed by {}, calling path = {}".format(
-                    the_bean_def, amount, t, tmp_path
-                )
+                f"Trying to increate order for {the_bean_def} by {amount} because it is needed by"
+                + f"{base_bean_def_ref}, calling path = {tmp_path}"
             )
             self.increase_type_init_order(the_bean_def, amount, True, tmp_path)
 
@@ -554,9 +557,10 @@ class BeanDependencyChainBuilder:
         """
         self.logging_raw_def_maps()
         all_types = self.raw_defs_map.keys()
-        [self.increase_type_init_order(x, 0, False) for x in all_types]
-        for t in all_types:
-            self.prepare_dependencies(t)
+        for current_type in all_types:
+            self.increase_type_init_order(current_type, 0, False)
+        for current_type in all_types:
+            self.prepare_dependencies(current_type)
         self.logging_bean_init_order()
         return self
 
@@ -566,8 +570,8 @@ class BeanRegistry:
     point declared."""
 
     _instance: Optional[BeanRegistry] = None
-    _beans_name_map: dict[str, Bean] = dict()
-    _beans_type_map: dict[BaseBeanDef, List[Bean]] = dict()
+    _beans_name_map: dict[str, Bean] = {}
+    _beans_type_map: dict[BaseBeanDef, List[Bean]] = {}
     _bean_lock = RLock()
 
     def __new__(cls):
@@ -586,7 +590,7 @@ class BeanRegistry:
         self.__beans_type_map: dict[BaseBeanDef, List[Bean]] = BeanRegistry._beans_type_map
         self.__bean_lock = BeanRegistry._bean_lock
 
-    def register_bean(self, bean: Bean):
+    def register_bean(self, bean_ref: Bean):
         """Registering a bean into registry.
 
         Parameters
@@ -595,14 +599,14 @@ class BeanRegistry:
             The bean's instance.
         """
         with self.__bean_lock:
-            result = self.__beans_name_map.setdefault(bean.name, bean)
-            if result != bean:
-                raise Exception("Bean of name={} type={} was already existed.".format(bean.name, bean.type))
-            bean_list = self.__beans_type_map.setdefault(bean.base_bean_def, list())
-            if len(bean_list) == 0 or bean_list.count(bean) == 0:
-                bean_list.append(bean)
+            result = self.__beans_name_map.setdefault(bean_ref.name, bean_ref)
+            if result != bean_ref:
+                raise Exception(f"Bean of name={bean_ref.name} type={bean_ref.type} was already existed.")
+            bean_list = self.__beans_type_map.setdefault(bean_ref.base_bean_def, [])
+            if len(bean_list) == 0 or bean_list.count(bean_ref) == 0:
+                bean_list.append(bean_ref)
 
-    def __get_or_create(self, bean: Bean) -> Any:
+    def __get_or_create(self, bean_ref: Bean) -> Any:
         """Get a bean if it is Singlton, or create a new instance if it is
         protype.
 
@@ -620,12 +624,12 @@ class BeanRegistry:
         ----
         Any: The bean's instance, could be any type.
         """
-        is_correct_type = isinstance(bean, Bean)
-        if bean is None or not is_correct_type:
-            raise Exception("Could not find a bean named {}".format(bean.name))
-        if type(bean) == PrototypeBean:
-            return bean.instance()
-        return bean.instance
+        is_correct_type = isinstance(bean_ref, Bean)
+        if bean_ref is None or not is_correct_type:
+            raise Exception(f"Could not find a bean named {bean_ref.name}")
+        if isinstance(bean_ref, PrototypeBean):
+            return bean_ref.instance()
+        return bean_ref.instance
 
     def one_by_name(self, name: str) -> Any:
         """Retrieve a bean by its name.
@@ -645,11 +649,11 @@ class BeanRegistry:
         Any: The bean's instance, could be any type.
         """
         if not name in self.__beans_name_map:
-            raise Exception("Could not find a bean named {}".format(name))
-        bean = self.__beans_name_map[name]
-        return self.__get_or_create(bean)
+            raise Exception(f"Could not find a bean named {name}")
+        bean_ref = self.__beans_name_map[name]
+        return self.__get_or_create(bean_ref)
 
-    def one_by_type(self, t: Type[Any]) -> Any:
+    def one_by_type(self, bean_type: Type[Any]) -> Any:
         """Get bean by it type.
 
         Parameters
@@ -666,14 +670,12 @@ class BeanRegistry:
         ----
         Any: The bean's instance, could be any type.
         """
-        items = self.list_by_type(BaseBeanDef("", t))
+        items = self.list_by_type(BaseBeanDef("", bean_type))
         if len(items) > 1:
-            raise Exception(
-                "Could not determine which instance to use for {} from {} candidates.".format(t, len(items))
-            )
+            raise Exception(f"Could not determine which instance to use for {bean_type} from {items} candidates.")
         return items[0]
 
-    def one_by_name_or_type(self, name: str, t: Type[Any]) -> Any:
+    def one_by_name_or_type(self, name: str, bean_type: Type[Any]) -> Any:
         """Get a bean by its name or type.
 
         Parameters
@@ -690,15 +692,15 @@ class BeanRegistry:
         """
         try:
             return self.one_by_name(name)
-        except:
-            return self.one_by_type(t)
+        except:  # pylint: disable=bare-except
+            return self.one_by_type(bean_type)
 
-    def list_by_type(self, t: BaseBeanDef) -> List[Any]:
+    def list_by_type(self, bean_def: BaseBeanDef) -> List[Any]:
         """Find a instances list of specificied bean type.
 
         Parameters
         ----
-        t: BaseBeanDef
+        bean_def: BaseBeanDef
             Beans definition
 
         Raises
@@ -711,22 +713,29 @@ class BeanRegistry:
         List[Any]: A list of found instances.
         """
         items: List[Bean] = []
-        if not t in self.__beans_name_map:
-            items = self.__get_matching_types(BeanFactory.get_class_by_bean_def(t))
+        if not bean_def in self.__beans_name_map:
+            items = self.__get_matching_types(BeanFactory.get_class_by_bean_def(bean_def))
         else:
-            items = self.__beans_type_map[t]
+            items = self.__beans_type_map[bean_def]
             if len(items) == 0:
-                items = self.__get_matching_types(cast(Type, t.type))
+                items = self.__get_matching_types(cast(Type, bean_def.type))
         if len(items) == 0:
-            raise Exception("Could not find a bean for type {}".format(t))
+            raise Exception(f"Could not find a bean for type {bean_def}")
+        bean_name = bean_def.name
         # trying to matching bean by name first
-        name_filter_method = lambda x: x.name == t.name and issubclass(x.type, BeanFactory.get_class_by_bean_def(t))
-        result_by_name = list(filter(name_filter_method, items))
+        result_by_name = list(filter(lambda x: self.bean_name_filter_method(x, bean_name, bean_def), items))
         items = result_by_name if len(result_by_name) > 0 else items
         items = [self.__get_or_create(x) for x in items]
         return items
 
-    def __get_matching_types(self, t: Type[Any]) -> List[Bean]:
+    def bean_name_filter_method(self, current_bean: Bean, name: str, bean_def: BaseBeanDef) -> bool:
+        return (
+            current_bean.name == name
+            and isinstance(current_bean.type, type)
+            and issubclass(current_bean.type, BeanFactory.get_class_by_bean_def(bean_def))
+        )
+
+    def __get_matching_types(self, the_type: Type[Any]) -> List[Bean]:
         """Get a proper list of beans which matching requested type.
 
         Parameters
@@ -738,16 +747,15 @@ class BeanRegistry:
         ----
         List[Bean]: a list of Bean which matching t, could be exact type or sub type.
         """
-        if type(t) is BeanProviderMeta:
-            t = cast(BeanProviderMeta, t).return_type
-        logger.debug("Trying to find matching type for {}, type is {}".format(t, type(t)))
-        filter_method = lambda x: issubclass(x.type, t)
+        old_type = the_type
+        if isinstance(the_type, BeanProviderMeta):
+            the_type = cast(BeanProviderMeta, the_type).return_type
+        logger.debug(f"Trying to find matching type for {old_type}, type is {the_type}")
         keys = self.__beans_type_map.keys()
-        matching_types = list(filter(filter_method, keys))
-        getter_method = lambda x: self.__beans_type_map[x]
+        matching_types = list(filter(lambda x: isinstance(x.type, type) and issubclass(x.type, the_type), keys))
         result: List[Bean] = []
-        for x in matching_types:
-            result.extend(getter_method(x))
+        for item in matching_types:
+            result.extend(self.__beans_type_map[item])
         return result
 
 
@@ -786,28 +794,27 @@ def parse_needed_injected_params(func: Callable) -> Dict[InjectedParam, Type[Any
     signature = inspect.signature(func)
     parameters = signature.parameters
     method_name = func.__name__
-    logger.debug("function {} has parameters : {} ".format(method_name, parameters))
-    for k, v in parameters.items():
-        default_value = v.default
+    logger.debug(f"function {method_name} has parameters : {parameters} ")
+    for key, value in parameters.items():
+        default_value = value.default
         param_type: Optional[Type] = None
-        param_name = k
-        bean_name = k
-        if v.annotation is not None:
-            param_type = v.annotation
+        param_name = key
+        bean_name = key
+        if value.annotation is not None:
+            param_type = value.annotation
         if isinstance(default_value, Injected):
             injected_value: Injected = cast(Injected, default_value)
             param_type = injected_value.real_type
             if len(injected_value.bean_name) > 0:
                 bean_name = injected_value.bean_name
         if param_type is None:
-            logger.warn(
-                "Failed to decide injected data type for {}.{}, annotated type is {} and default value is {}".format(
-                    method_name, k, v.annotation, default_value
-                )
+            logger.warning(
+                f"Failed to decide injected data type for {method_name}.{key}, "
+                + f"annotated type is {value.annotation} and default value is {default_value}"
             )
             continue
-        if will_argument_be_ignored(func, k) or param_type is _empty:
-            logger.debug("Ignoring argument {} of method {}".format(k, method_name))
+        if will_argument_be_ignored(func, key) or param_type is _empty:
+            logger.debug(f"Ignoring argument {key} of method {method_name}")
             continue
         # logger.debug("*** {}.{} can be injected with type={}".format(method_name, k, param_type))
         injected_params.setdefault(InjectedParam(param_name, bean_name), param_type)
@@ -857,9 +864,8 @@ class BeanProviderMeta:
 
     def __call__(self, *args, **kwargs):
         logger.debug(
-            "Invoking {} is_class_member ? {}, class_reference = {}, args type={}, kwargs type = {}".format(
-                self.func.__name__, self.class_method_flag, self.class_reference, type(args), type(kwargs)
-            )
+            f"Invoking {self.func.__name__} is_class_member ? {self.class_method_flag}, "
+            + f"class_reference = {self.class_reference}, args type={type(args)}, kwargs type = {type(kwargs)}"
         )
         if self.class_method_flag and self.class_reference is not None:
             # set proper self for fields
@@ -878,16 +884,15 @@ class BeanProviderMeta:
                     args = tuple([class_instance])
 
             logger.debug(
-                (
-                    "Trying to setup self reference for calling method {}, {} args {} kwargs."
-                    + "class_type = {}, instance = {}"
-                ).format(self.func.__name__, len(args), len(kwargs.keys()), class_type, class_instance)
+                f"Trying to setup self reference for calling method {self.func.__name__}, "
+                + f"{len(args)} args {len(kwargs.keys())} kwargs."
+                + f"class_type = {class_type}, instance = {class_instance}"
             )
 
         return BeanFactory.inject_method(self.func)(*args, **kwargs)
 
     def do_register(self) -> ScopedBeanDef:
-        logger.debug("trying to register with {}".format(self.func.__name__))
+        logger.debug(f"trying to register with {self.func.__name__}")
         register_result = BeanFactory.register_bean_def_with_meta(self)
         BeanInitializer.get_instance().register_bean_def(register_result, self)
         return register_result
@@ -896,7 +901,7 @@ class BeanProviderMeta:
         params_str = (
             "None"
             if self.init_params_need_injection is None
-            else ",".join(["{}:{}".format(k, v) for (k, v) in self.init_params_need_injection.items()])
+            else ",".join([f"{k}:{v}" for (k, v) in self.init_params_need_injection.items()])
         )
         return (
             "BeanProvider(bean_name={}, type={}, factory_method={}, scope={}, "
@@ -938,8 +943,8 @@ class InjectedInstructionMeta:
             )
         )
         # call real method or there will be stack overflow happened.
-        if internal_call_arg in kwargs:
-            del kwargs[internal_call_arg]
+        if INTERNAL_CALL_FLAG in kwargs:
+            del kwargs[INTERNAL_CALL_FLAG]
             return self.func(*args, **kwargs)
         return BeanFactory.inject_method(self.func)(*args, **kwargs)
 
@@ -1129,12 +1134,12 @@ class BeanFactory:
         if bean_name is None or len(bean_name) == 0:
             bean_name = cls.snake_case(func.__name__)
         init_method = func.__init__
-        metadata_attr = method_annotation_real_method_reference
+        metadata_attr = METHOD_ANNOTATION_REAL_METHOD_REFERENCE
         if metadata_attr in init_method.__annotations__:
             init_method = init_method.__annotations__[metadata_attr]
         params_need_injected = parse_needed_injected_params(init_method)
         meta = BeanProviderMeta(class_bean_wrapper, bean_name, func, scope, params_need_injected)
-        class_bean_wrapper.__annotations__[method_annotation_meta_bean] = meta
+        class_bean_wrapper.__annotations__[METHOD_ANNOTATION_META_BEAN] = meta
         class_path = "{}.{}".format(func.__module__, func.__name__)
         cls.__class_ref.setdefault(class_path, func)
         logger.debug(
@@ -1158,7 +1163,7 @@ class BeanFactory:
         if type(func) is type:
             return cls.__class_bean_decorator(cast(Type[Any], func), scope, name)
         real_func = func
-        metadata_attr = method_annotation_real_method_reference
+        metadata_attr = METHOD_ANNOTATION_REAL_METHOD_REFERENCE
         if is_function(real_func) and metadata_attr in real_func.__annotations__:
             real_func = func.__annotations__[metadata_attr]
             logger.debug(
@@ -1182,7 +1187,7 @@ class BeanFactory:
             class_method_flag=is_class_member,
             class_reference=class_reference,
         )
-        real_func.__annotations__[method_annotation_meta_bean] = meta
+        real_func.__annotations__[METHOD_ANNOTATION_META_BEAN] = meta
         # return as it is
         return func
 
@@ -1209,11 +1214,11 @@ class BeanFactory:
             real_func = cast(BeanProviderMeta, func).func
         logger.debug("INIT trying to delcare injected method {}".format(real_func.__name__))
         meta = InjectedInstructionMeta(real_func, bean_provider_meta)
-        real_func.__annotations__[method_annotation_meta_injected] = meta
+        real_func.__annotations__[METHOD_ANNOTATION_META_INJECTED] = meta
 
         def wrapper(*args, **kwargs) -> Any:
-            if internal_call_arg in kwargs:
-                del kwargs[internal_call_arg]
+            if INTERNAL_CALL_FLAG in kwargs:
+                del kwargs[INTERNAL_CALL_FLAG]
             (real_args, real_kwargs) = cls.inject_arguments(
                 real_func, cast(Tuple[Any], args), cast(Dict[str, Any], kwargs)
             )
@@ -1228,7 +1233,7 @@ class BeanFactory:
             )
             return func(*real_args, **real_kwargs)
 
-        wrapper.__annotations__[method_annotation_real_method_reference] = func
+        wrapper.__annotations__[METHOD_ANNOTATION_REAL_METHOD_REFERENCE] = func
         return wrapper
 
     @classmethod
@@ -1250,21 +1255,21 @@ class BeanFactory:
         Callable: a callable can be invoked directly
         """
         method_type = type(method)
-        if method_type != InjectedInstructionMeta and method_type != BeanProviderMeta:
+        if method_type not in [InjectedInstructionMeta, BeanProviderMeta]:
             if is_function(method_type):
                 method = InjectedInstructionMeta(method)
             else:
-                raise Exception("Need a injected method, but got {}.".format(type(method)))
-        logger.debug("Trying to inject method {}".format(method))
+                raise Exception(f"Need a injected method, but got {type(method)}.")
+        logger.debug(f"Trying to inject method {method}")
         if method_type == BeanProviderMeta:
             method = InjectedInstructionMeta(method.func)
 
         def wrapper(*args: Any, **kwargs) -> Any:
             raw_method = method.func
-            (_, real_kwargs) = cls.inject_arguments(
+            (real_args, real_kwargs) = cls.inject_arguments(  # pylint: disable=unused-variable
                 raw_method, cast(Tuple[Any], args), cast(Dict[str, Any], kwargs), method
             )
-            real_kwargs[internal_call_arg] = True
+            real_kwargs[INTERNAL_CALL_FLAG] = True
             result = method(*args, **real_kwargs)
             logger.debug("Got {} from real method {}".format(result, raw_method.__name__))
             return result
@@ -1300,8 +1305,8 @@ class BeanFactory:
         real_kwargs: Dict[str, Any] = dict()
         for k in kwargs:
             real_kwargs[k] = kwargs[k]
-        if meta is None and hasattr(method.__annotations__, method_annotation_meta_injected):
-            meta = method.__annotations__[method_annotation_meta_injected]
+        if meta is None and hasattr(method.__annotations__, METHOD_ANNOTATION_META_INJECTED):
+            meta = method.__annotations__[METHOD_ANNOTATION_META_INJECTED]
         if meta is None:
             meta = InjectedInstructionMeta(method)
         for bean_name in meta.injected_params.keys():

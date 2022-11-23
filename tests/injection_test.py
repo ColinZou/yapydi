@@ -26,7 +26,7 @@ class MyItem:
 
 class MyInjection:
     @injected
-    def __init__(self, test: str = Injected[str, "bean_test_str"]):
+    def __init__(self, test: str = Injected[str]):
         logger.info("{} __init__ self={}, got bean_test_str={}".format(self.__class__, self, bean_test_str))
         self.bean_test_str = test
 

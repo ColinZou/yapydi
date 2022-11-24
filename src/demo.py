@@ -8,7 +8,8 @@ def world() -> str:
 
 def hello_world():
     registry = BeanRegistry.get_instance()
-    print("Hello {}!".format(registry.one_by_name("my_bean_name")))
+    str_bean = registry.one_by_name("my_bean_name")
+    print(f"Hello {str_bean}!")
 
 
 @enable_di

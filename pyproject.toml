@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "yapydi"
-version = "0.1.2"
+version = "0.1.3"
 authors = [{"email"="zoukaiping@gmail.com", "name"="Kaiping Zou"}]
 description = "Yet Another Python Dependency Injection"
 readme = "README.MD"
